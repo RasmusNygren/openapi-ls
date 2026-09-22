@@ -61,11 +61,12 @@ mod tests {
 
     #[test]
     fn resolves_relative_uris_and_decodes_pointer_tokens_once() {
-        let base = Url::parse("file:///specs/api/openapi.yaml").unwrap();
+        // A drive-qualified URI converts to a local path on both Windows and Unix.
+        let base = Url::parse("file:///C:/specs/api/openapi.yaml").unwrap();
         let target = resolve(&base, "../models/pet%20types.json#/a~1b/~01/caf%C3%A9/0/").unwrap();
         assert_eq!(
             target.document.as_str(),
-            "file:///specs/models/pet%20types.json"
+            "file:///C:/specs/models/pet%20types.json"
         );
         assert_eq!(target.pointer, ["a/b", "~1", "café", "0", ""]);
         for reference in ["", "#", "../model.yaml"] {
