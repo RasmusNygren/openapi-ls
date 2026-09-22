@@ -19,6 +19,12 @@ impl Format {
     }
 }
 
+pub(crate) struct Reference {
+    pub(crate) value: String,
+    pub(crate) range: Range,
+}
+
+#[derive(Clone)]
 pub(crate) struct Document {
     text: String,
     tree: Tree,
@@ -98,7 +104,7 @@ impl Document {
         }
     }
 
-    pub(crate) fn reference_at(&self, position: Position) -> Option<String> {
+    pub(crate) fn reference_at(&self, position: Position) -> Option<Reference> {
         let root = content(self.tree.root_node())?;
         let offset = self.offset(position)?;
         let mut node = root.descendant_for_byte_range(offset, offset)?;
@@ -108,9 +114,12 @@ impl Document {
                 let key = node.child_by_field_name("key")?;
                 let value = node.child_by_field_name("value")?;
                 if self.scalar(key).as_deref() == Some("$ref")
-                    && value.byte_range().contains(&offset)
+                    && (value.byte_range().contains(&offset) || key.byte_range().contains(&offset))
                 {
-                    reference = self.scalar(value);
+                    reference = self.scalar(value).map(|value_text| Reference {
+                        value: value_text,
+                        range: self.range(value),
+                    });
                 }
             }
             // Schema resource scopes need a separate resolver. Don't return a wrong target.
@@ -122,6 +131,97 @@ impl Document {
                 None => return reference,
             };
         }
+    }
+
+    pub(crate) fn references(&self) -> Vec<Reference> {
+        let Some(root) = content(self.tree.root_node()) else {
+            return Vec::new();
+        };
+        let mut references = Vec::new();
+        let mut cursor = root.walk();
+        loop {
+            let node = cursor.node();
+            if is_pair(node)
+                && let Some(key) = node.child_by_field_name("key")
+                && self.scalar(key).as_deref() == Some("$ref")
+                && let Some(reference) = self.reference_at(self.position(key.start_byte()))
+            {
+                references.push(reference);
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return references;
+                }
+            }
+        }
+    }
+
+    /// Select a declaration key or array element under the cursor.
+    pub(crate) fn symbol_at(&self, position: Position) -> Option<Range> {
+        let root = content(self.tree.root_node())?;
+        let offset = self.offset(position)?;
+        let mut node = root.descendant_for_byte_range(offset, offset)?;
+        loop {
+            if is_pair(node)
+                && let Some(key) = node.child_by_field_name("key")
+                && key.byte_range().contains(&offset)
+                && !key.has_error()
+            {
+                return Some(self.range(key));
+            }
+            let parent = node.parent()?;
+            if is_sequence(parent) && !node.is_extra() {
+                return Some(self.range(content(node).unwrap_or(node)));
+            }
+            node = parent;
+        }
+    }
+
+    pub(crate) fn preview(&self, range: Range) -> Option<String> {
+        let root = content(self.tree.root_node())?;
+        let start = self.offset(range.start)?;
+        let end = self.offset(range.end)?;
+        let mut node = root.descendant_for_byte_range(start, end)?;
+        while let Some(parent) = node.parent() {
+            if is_pair(parent)
+                && parent
+                    .child_by_field_name("key")
+                    .is_some_and(|key| key.byte_range() == (start..end))
+            {
+                node = parent;
+                break;
+            }
+            if parent.byte_range() != (start..end) {
+                break;
+            }
+            node = parent;
+        }
+        let indent = " ".repeat(node.start_position().column);
+        let source = &self.text[node.byte_range()];
+        let mut preview = String::new();
+        for (index, line) in source.lines().enumerate() {
+            let line = if index == 0 {
+                line
+            } else {
+                line.strip_prefix(&indent).unwrap_or(line)
+            };
+            if index >= 40 {
+                preview.push_str("… (preview truncated)\n");
+                break;
+            }
+            if preview.len() + line.len() > 4000 {
+                let remaining = 4000_usize.saturating_sub(preview.len());
+                preview.push_str(&line[..line.floor_char_boundary(remaining)]);
+                preview.push_str("\n… (preview truncated)\n");
+                break;
+            }
+            preview.push_str(line);
+            preview.push('\n');
+        }
+        Some(preview)
     }
 
     fn member<'a>(&self, node: Node<'a>, name: &str) -> Option<(Node<'a>, Node<'a>)> {
@@ -153,7 +253,7 @@ impl Document {
                 let (key, value) = self.member(node, token)?;
                 selection = key;
                 node = value;
-            } else if matches!(node.kind(), "array" | "block_sequence" | "flow_sequence") {
+            } else if is_sequence(node) {
                 if token.is_empty()
                     || (token.starts_with('0') && token.len() > 1)
                     || !token.bytes().all(|byte| byte.is_ascii_digit())
@@ -176,6 +276,10 @@ impl Document {
 
 fn is_pair(node: Node<'_>) -> bool {
     matches!(node.kind(), "pair" | "block_mapping_pair" | "flow_pair")
+}
+
+fn is_sequence(node: Node<'_>) -> bool {
+    matches!(node.kind(), "array" | "block_sequence" | "flow_sequence")
 }
 
 fn is_mapping(node: Node<'_>) -> bool {
@@ -232,12 +336,23 @@ mod tests {
             let doc = Document::new(source.into(), format).unwrap();
             let reference = doc.position(source.find("#/components").unwrap());
             assert_eq!(
-                doc.reference_at(reference).as_deref(),
+                doc.reference_at(reference)
+                    .map(|reference| reference.value)
+                    .as_deref(),
                 Some("#/components/schemas/Pet~1name")
             );
             let target = doc
                 .target(&["components".into(), "schemas".into(), "Pet/name".into()])
                 .unwrap();
+            assert_eq!(doc.symbol_at(target.start), Some(target));
+            assert!(doc.preview(target).unwrap().contains("{}"));
+            let references = doc.references();
+            assert_eq!(references.len(), 1);
+            assert_eq!(references[0].value, "#/components/schemas/Pet~1name");
+            assert_eq!(
+                doc.reference_at(references[0].range.start).unwrap().value,
+                references[0].value
+            );
             assert_eq!(
                 target.start,
                 doc.position(
@@ -287,6 +402,7 @@ mod tests {
         );
         assert_eq!(
             doc.reference_at(doc.position(source.find("#/Pet").unwrap()))
+                .map(|reference| reference.value)
                 .as_deref(),
             Some("#/Pet")
         );
@@ -304,5 +420,30 @@ mod tests {
             doc.reference_at(doc.position(source.find("#/Pet").unwrap()))
                 .is_none()
         );
+        assert!(doc.references().is_empty());
+    }
+
+    #[test]
+    fn hover_previews_preserve_indentation_and_bound_large_unicode_values() {
+        let doc = Document::new(
+            "schemas:\n  Pet:\n    type: object\n    description: 'A pet'\n".into(),
+            Format::Yaml,
+        )
+        .unwrap();
+        let range = doc.target(&["schemas".into(), "Pet".into()]).unwrap();
+        assert_eq!(
+            doc.preview(range).unwrap(),
+            "Pet:\n  type: object\n  description: 'A pet'\n"
+        );
+        let source = format!("{{\"description\":\"{}\"}}", "😀".repeat(2000));
+        let doc = Document::new(source, Format::Json).unwrap();
+        let preview = doc.preview(doc.target(&[]).unwrap()).unwrap();
+        assert!(preview.starts_with("{\"description\":\"😀"));
+        assert!(preview.contains("preview truncated"));
+        assert!(preview.len() < 4100);
+        let source = format!("Pet:\n{}", "  description: text\n".repeat(60));
+        let doc = Document::new(source, Format::Yaml).unwrap();
+        let preview = doc.preview(doc.target(&["Pet".into()]).unwrap()).unwrap();
+        assert_eq!(preview.lines().count(), 41);
     }
 }
