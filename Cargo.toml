@@ -1,10 +1,14 @@
 [package]
-name = "openapi-lsp"
+name = "openapi-ls"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 description = "A small language server for OpenAPI reference navigation"
+repository = "https://github.com/RasmusNygren/openapi-ls"
 publish = false
+
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 lsp-server = "0.10"
@@ -22,3 +26,7 @@ tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

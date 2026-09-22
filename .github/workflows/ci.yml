@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      plan:
+        description: Release plan supplied by cargo-dist
+        required: false
+        type: string
 
 permissions:
   contents: read

@@ -108,7 +108,7 @@ pub(crate) fn run(connection: Connection) -> Result<()> {
             }
             Message::Notification(notification) if !shutdown => {
                 if let Err(error) = server.notification(notification) {
-                    eprintln!("openapi-lsp: {error}");
+                    eprintln!("openapi-ls: {error}");
                 }
             }
             _ => {}
@@ -157,7 +157,7 @@ impl Server {
             Ok(Ok(value)) => Response::new_ok(request.id, value),
             Ok(Err(error)) => {
                 // A missing/unreadable referenced file must not take down the editor session.
-                eprintln!("openapi-lsp: {} failed: {error}", request.method);
+                eprintln!("openapi-ls: {} failed: {error}", request.method);
                 Response::new_ok(request.id, serde_json::Value::Null)
             }
         }
@@ -329,7 +329,7 @@ impl Server {
             let document = match self.document(&uri) {
                 Ok(document) => document,
                 Err(error) => {
-                    eprintln!("openapi-lsp: cannot search {uri}: {error}");
+                    eprintln!("openapi-ls: cannot search {uri}: {error}");
                     continue;
                 }
             };
@@ -376,10 +376,7 @@ impl Server {
             let entries = match std::fs::read_dir(&directory) {
                 Ok(entries) => entries,
                 Err(error) => {
-                    eprintln!(
-                        "openapi-lsp: cannot search {}: {error}",
-                        directory.display()
-                    );
+                    eprintln!("openapi-ls: cannot search {}: {error}", directory.display());
                     continue;
                 }
             };

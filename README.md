@@ -1,7 +1,11 @@
-# openapi-lsp
+# openapi-ls
 
 A small Rust language server for `$ref` navigation, references, and hover in OpenAPI YAML and JSON files.
 It communicates over stdio and works with Neovim's built-in LSP client.
+
+Prebuilt binaries will be published on [GitHub Releases](https://github.com/RasmusNygren/openapi-ls/releases).
+Once installed on your `PATH`, use `cmd = { "openapi-ls" }` in the Neovim
+configuration below. Building from source is only needed for development.
 
 ## Build
 
@@ -12,7 +16,7 @@ cargo build --release --locked
 ```
 
 `rust-toolchain.toml` pins Rust 1.98.1, rustfmt, and Clippy. The project uses Rust 2024.
-The executable is `target/release/openapi-lsp`. It takes no arguments; stdout is
+The executable is `target/release/openapi-ls`. It takes no arguments; stdout is
 reserved for LSP messages, and errors go to stderr.
 
 ## Neovim
@@ -20,17 +24,17 @@ reserved for LSP messages, and errors go to stderr.
 Add this to your configuration for Neovim 0.11 or newer, changing the executable path:
 
 ```lua
-vim.lsp.config("openapi_lsp", {
-  cmd = { "/absolute/path/to/openapi-lsp/target/release/openapi-lsp" },
+vim.lsp.config("openapi_ls", {
+  cmd = { "/absolute/path/to/openapi-ls/target/release/openapi-ls" },
   filetypes = { "yaml", "json" },
   root_markers = { "openapi.yaml", "openapi.yml", "openapi.json", ".git" },
 })
-vim.lsp.enable("openapi_lsp")
+vim.lsp.enable("openapi_ls")
 
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(event)
     local client = vim.lsp.get_client_by_id(event.data.client_id)
-    if client and client.name == "openapi_lsp" then
+    if client and client.name == "openapi_ls" then
       vim.keymap.set("n", "gd", vim.lsp.buf.definition, {
         buffer = event.buf,
         desc = "Go to reference definition",
@@ -119,3 +123,50 @@ synchronization and are reparsed on change. Closed target files are read on each
 request, avoiding stale disk caches. Find-references scans on demand without a
 persistent index. Add incremental parsing, caching, or a reverse reference index
 when large specifications demonstrate a need.
+
+## Releases
+
+Releases use [cargo-dist](https://axodotdev.github.io/cargo-dist/) 0.33.0 and
+GitHub Actions. Manually running the Release workflow builds binaries for:
+
+- macOS: Apple Silicon and Intel.
+- Linux: ARM64 and x86-64 (glibc).
+- Windows: x86-64.
+
+GitHub Releases receive the archives, checksums, and shell/PowerShell installers.
+Users of these binaries do not need Rust or a C compiler. The release workflow
+runs the existing formatting, Clippy, and test checks before publishing. Pull
+requests validate the release plan without publishing anything. Crates.io
+publishing remains disabled.
+
+To publish a release:
+
+1. Update the version in `Cargo.toml`, run `cargo check` to update `Cargo.lock`,
+   and commit the changes. The first release can use the existing `0.1.0` version.
+2. Push the changes to GitHub. The workflow must be present on the default branch
+   for GitHub to display its manual trigger.
+3. Open **Actions → Release → Run workflow**, select the branch to release, and
+   enter a matching version tag such as `v0.1.0` in the `tag` input.
+4. Click **Run workflow**. The workflow builds the selected branch and creates
+   the tag when it publishes the GitHub Release; you do not need to push a tag.
+
+The default `tag` value, `dry-run`, builds and uploads workflow artifacts without
+publishing a release. Pushing tags does not trigger the release workflow.
+
+The workflow uses GitHub's automatic `GITHUB_TOKEN`; no custom release secret is
+needed. Wait for the Release workflow to finish before sharing the release.
+
+To maintain or validate the workflow locally:
+
+```sh
+cargo install cargo-dist --version 0.33.0 --locked
+dist generate
+dist generate --check
+dist plan
+dist build
+```
+
+Edit `dist-workspace.toml` and regenerate `.github/workflows/release.yml` with
+`dist generate`; do not edit the generated workflow directly. `dist build`
+packages the current platform locally without publishing. CI supplies the native
+build tools for the C code in Tree-sitter and the grammars.
