@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 description = "A small language server for OpenAPI reference navigation"
+license = "MIT"
 repository = "https://github.com/RasmusNygren/openapi-ls"
 publish = false
 
